@@ -4,7 +4,7 @@ import type { TradeStrategy, OraclePrice, Portfolio } from '@/types';
 const client = new Anthropic();
 
 export interface LLMDecision {
-  action: 'buy' | 'sell' | 'hold';
+  recommendation: 'buy' | 'sell' | 'hold';
   confidence: number;
   reasoning: string;
   recommendedAmount?: bigint;
@@ -66,14 +66,14 @@ Respond ONLY with valid JSON, no markdown or code blocks.`;
   try {
     const decision = JSON.parse(content.text);
     return {
-      action: decision.action || 'hold',
+      recommendation: decision.action || decision.recommendation || 'hold',
       confidence: decision.confidence || 0,
       reasoning: decision.reasoning || 'No reasoning provided',
     };
   } catch (error) {
     console.error('Failed to parse LLM response:', content.text);
     return {
-      action: 'hold',
+      recommendation: 'hold',
       confidence: 0,
       reasoning: 'Failed to parse AI response',
     };

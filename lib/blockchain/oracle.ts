@@ -24,8 +24,8 @@ export async function getChainlinkPrice(
     symbol,
     price: BigInt(latestData[1]),
     decimals: decimals as number,
-    roundId: latestData[0],
-    updatedAt: latestData[3] as number,
+    roundId: latestData[0] as bigint,
+    updatedAt: Number(latestData[3]),
   };
 }
 

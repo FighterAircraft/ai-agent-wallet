@@ -1,9 +1,11 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 import type { Trade, TradeStrategy, AgentDecision } from '@/types';
 
-const dbPath = path.join(os.homedir(), '.ai-agent-wallet', 'data.db');
+const dbDir = path.join(os.homedir(), '.ai-agent-wallet');
+const dbPath = path.join(dbDir, 'data.db');
 
 let db: Database.Database | null = null;
 
@@ -11,6 +13,11 @@ export function initDB(): Database.Database {
   if (db) return db;
 
   try {
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+
     db = new Database(dbPath);
 
     db.exec(`
@@ -29,8 +36,8 @@ export function initDB(): Database.Database {
       CREATE TABLE IF NOT EXISTS trades (
         id TEXT PRIMARY KEY,
         hash TEXT NOT NULL,
-        from TEXT NOT NULL,
-        to TEXT NOT NULL,
+        "from" TEXT NOT NULL,
+        "to" TEXT NOT NULL,
         amount INTEGER NOT NULL,
         price INTEGER NOT NULL,
         timestamp INTEGER NOT NULL,
@@ -107,7 +114,7 @@ export function saveTrade(trade: Trade): void {
   const database = db || initDB();
   const stmt = database.prepare(`
     INSERT OR REPLACE INTO trades
-    (id, hash, from, to, amount, price, timestamp, status, agentDecided, reason)
+    (id, hash, "from", "to", amount, price, timestamp, status, agentDecided, reason)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 

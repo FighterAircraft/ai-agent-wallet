@@ -57,6 +57,6 @@ export function getTriggeredStrategies(
   currentPrice: OraclePrice
 ): TradeStrategy[] {
   return evaluateRules(strategies, currentPrice)
-    .filter((eval) => eval.triggered)
-    .map((eval) => eval.strategy);
+    .filter((rule) => rule.triggered)
+    .map((rule) => rule.strategy);
 }
