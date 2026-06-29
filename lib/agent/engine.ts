@@ -1,65 +1,56 @@
 import { getChainlinkPrice } from '@/lib/blockchain/oracle';
-import { evaluateRules, getTriggeredStrategies } from '@/lib/agent/rules';
+import { getTriggeredStrategies } from '@/lib/agent/rules';
 import { analyzeCryptoMarket } from '@/lib/agent/llm';
 import { getStrategies, saveDecision } from '@/lib/db';
-import type { Portfolio, OraclePrice, TradeStrategy, AgentDecision } from '@/types';
+import type { Portfolio, AgentDecision } from '@/types';
 
-export interface AgentConfig {
-  enabled: boolean;
-  checkInterval: number; // milliseconds
+export interface DecisionOptions {
   minConfidence: number; // 0-100
   autoExecute: boolean;
-  notifyOnDecision?: (decision: AgentDecision) => void;
+  chain?: 'mainnet' | 'sepolia';
 }
 
-const DEFAULT_CONFIG: AgentConfig = {
-  enabled: true,
-  checkInterval: 30000, // 30 seconds
-  minConfidence: 60,
-  autoExecute: false,
-  notifyOnDecision: undefined,
-};
+export interface DecisionSummary {
+  priceUsd: number; // ETH/USD for logging convenience
+  strategyCount: number;
+  triggeredCount: number;
+  decisionId?: string;
+  status?: AgentDecision['status'];
+  confidence?: number;
+  recommendation?: 'buy' | 'sell' | 'hold';
+}
 
-let agentRunning = false;
-let agentConfig = DEFAULT_CONFIG;
-let pollInterval: NodeJS.Timeout | null = null;
-
-export async function runAgentLoop(
+/**
+ * Run one agent decision cycle against the given portfolio.
+ *
+ * Pure-ish core reused by both the standalone daemon and (previously) the web
+ * loop. Fetches price, evaluates rules, and — only when a rule triggers — asks
+ * the LLM and persists a decision. Idle cycles (no trigger) are NOT written to
+ * the decisions table to keep it meaningful at 24/7 polling rates.
+ */
+export async function executeAgentDecision(
   portfolio: Portfolio,
-  config?: Partial<AgentConfig>
-): Promise<void> {
-  agentConfig = { ...DEFAULT_CONFIG, ...config };
-
-  if (agentRunning) {
-    console.warn('Agent is already running');
-    return;
-  }
-
-  agentRunning = true;
-  console.log('Agent loop started with config:', agentConfig);
-
-  if (pollInterval) clearInterval(pollInterval);
-
-  pollInterval = setInterval(async () => {
-    if (!agentRunning || !agentConfig.enabled) return;
-
-    try {
-      await executeAgentDecision(portfolio);
-    } catch (error) {
-      console.error('Agent loop error:', error);
-    }
-  }, agentConfig.checkInterval);
-}
-
-export async function executeAgentDecision(portfolio: Portfolio): Promise<void> {
+  opts: DecisionOptions
+): Promise<DecisionSummary> {
+  const chain = opts.chain ?? 'sepolia';
   const strategies = getStrategies();
-  if (strategies.length === 0) return;
+  const price = await getChainlinkPrice('ETH/USD', chain);
+  const priceUsd = Number(price.price) / 10 ** price.decimals;
 
-  const price = await getChainlinkPrice('ETH/USD');
+  const summary: DecisionSummary = {
+    priceUsd,
+    strategyCount: strategies.length,
+    triggeredCount: 0,
+  };
+
+  if (strategies.length === 0) return summary;
+
   const triggeredStrategies = getTriggeredStrategies(strategies, price);
+  summary.triggeredCount = triggeredStrategies.length;
+  if (triggeredStrategies.length === 0) return summary;
 
   const decision: AgentDecision = {
-    id: `decision_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    id: `decision_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
     timestamp: Math.floor(Date.now() / 1000),
     price: price.price,
     portfolioValue: portfolio.totalValue,
@@ -67,48 +58,29 @@ export async function executeAgentDecision(portfolio: Portfolio): Promise<void> 
     status: 'pending',
   };
 
-  // If any rule-based strategies are triggered, prepare for execution
-  if (triggeredStrategies.length > 0) {
-    // Analyze with LLM for context
-    if (agentConfig.enabled) {
-      try {
-        const llmDecision = await analyzeCryptoMarket(price, portfolio, triggeredStrategies);
-        decision.llmAnalysis = llmDecision;
+  try {
+    const llm = await analyzeCryptoMarket(price, portfolio, triggeredStrategies);
+    decision.llmAnalysis = {
+      confidence: llm.confidence,
+      recommendation: llm.recommendation,
+      reasoning: llm.reasoning,
+    };
 
-        // Auto-execute if confidence is high and auto-execute is enabled
-        if (llmDecision.confidence >= agentConfig.minConfidence && agentConfig.autoExecute) {
-          decision.status = 'executed';
-        } else {
-          decision.status = 'pending';
-        }
-      } catch (error) {
-        console.error('LLM analysis failed:', error);
-        decision.status = 'rejected';
-      }
-    }
+    // NOTE: "executed" only marks the decision — there is no real on-chain swap
+    // yet (signing is the user's MetaMask, not the server). See DEPLOY.md / MVP
+    // limitations. autoExecute + high confidence gates this flag only.
+    decision.status =
+      opts.autoExecute && llm.confidence >= opts.minConfidence ? 'executed' : 'pending';
+
+    summary.confidence = llm.confidence;
+    summary.recommendation = llm.recommendation;
+  } catch (error) {
+    console.error('LLM analysis failed:', error);
+    decision.status = 'rejected';
   }
 
   saveDecision(decision);
-  agentConfig.notifyOnDecision?.(decision);
-}
-
-export function stopAgentLoop(): void {
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
-  }
-  agentRunning = false;
-  console.log('Agent loop stopped');
-}
-
-export function isAgentRunning(): boolean {
-  return agentRunning;
-}
-
-export function updateAgentConfig(config: Partial<AgentConfig>): void {
-  agentConfig = { ...agentConfig, ...config };
-}
-
-export function getAgentConfig(): AgentConfig {
-  return { ...agentConfig };
+  summary.decisionId = decision.id;
+  summary.status = decision.status;
+  return summary;
 }

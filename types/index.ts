@@ -57,3 +57,14 @@ export interface OraclePrice {
   roundId: bigint;
   updatedAt: number;
 }
+
+// Persisted agent control/runtime state (shared between the web process and the
+// standalone daemon via SQLite — see lib/db agent_state table).
+export interface AgentState {
+  enabled: boolean;
+  checkInterval: number; // milliseconds
+  minConfidence: number; // 0-100
+  autoExecute: boolean;
+  lastHeartbeat: number; // unix seconds, 0 if never
+  updatedAt: number; // unix seconds
+}

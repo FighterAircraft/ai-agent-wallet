@@ -32,6 +32,7 @@ M8 开发机(`sky@192.168.1.7`)在局域网内、**没有独立公网 IP 出口*
 |---|---|
 | 仓库目录 | `/home/sky/ai-agent-wallet` |
 | web 服务(systemd) | `ai-agent-wallet.service` — `npm run start` @ `:3000`,`enabled` + `Restart=always` |
+| **agent daemon(systemd)** | `ai-agent-wallet-daemon.service` — `node --env-file=.env.local dist/daemon.mjs`,`User=sky`,`enabled` + `Restart=always` |
 | 隧道服务(systemd) | `cloudflared-wallet.service` — `User=sky`,`enabled` + `Restart=always` |
 | 隧道名 / UUID | `wallet-m8` / `872ad250-4f10-48ae-98ee-135169c87724` |
 | 隧道凭证目录 | `/home/sky/.cloudflared/`(`config.yml`、`cert.pem`、`<UUID>.json`,**勿进 git**) |
@@ -170,7 +171,56 @@ systemctl status ai-agent-wallet --no-pager
 curl -I http://localhost:3000
 ```
 
-> 之后的交易 agent daemon 可照此再加一个 systemd unit,三个服务(web / agent / cloudflared)统一用 systemd 管理。
+> 三个服务(web / agent daemon / cloudflared)统一用 systemd 管理。
+
+---
+
+## 二·五、Agent 常驻 daemon(systemd)
+
+交易 agent 跑在**独立 Node 进程**(不在 web 进程里),由 SQLite 的 `agent_state` 表驱动:网页上 Start/Stop 切 `enabled` 标志,daemon 按标志运行并每轮写心跳。只读链上余额,**不签名、不下单**。
+
+### 1. 构建产物
+```bash
+cd /home/sky/ai-agent-wallet
+npm run build:daemon         # esbuild 打包 → dist/daemon.mjs(@/ 别名已解析,deps 外部化)
+```
+> `dist/` 不进 git(产物),每次部署用 `build:daemon` 生成。`scripts/redeploy.sh` 默认已包含这步。
+
+### 2. 配置监控钱包(可选)
+在 `/home/sky/ai-agent-wallet/.env.local` 里设:
+```bash
+AGENT_WALLET_ADDRESS=0x....   # 要监控的钱包地址;留空则用 mock 1 ETH
+AGENT_CHAIN=sepolia           # sepolia(默认) 或 mainnet
+```
+改完需 `scp` 同步并重启 daemon。
+
+### 3. 新建 `/etc/systemd/system/ai-agent-wallet-daemon.service`
+```ini
+[Unit]
+Description=AI Agent Wallet Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sky
+WorkingDirectory=/home/sky/ai-agent-wallet
+ExecStart=/usr/bin/node --env-file=/home/sky/ai-agent-wallet/.env.local /home/sky/ai-agent-wallet/dist/daemon.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+> Node 22 用 `--env-file` 原生加载 `.env.local`,无需 dotenv。`ExecStart` 的 `node` 路径以 `which node` 为准(M8 实测 `/usr/bin/node`)。
+
+### 4. 启用
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-agent-wallet-daemon
+journalctl -u ai-agent-wallet-daemon -n 20 --no-pager   # 应看到 "daemon started" + 每轮 idle/cycle
+```
+> 默认 `agent_state.enabled=0`(idle)。在网页点 Start,或直接 `POST /api/agent/start`,daemon 即开始决策。
 
 ---
 
@@ -226,6 +276,7 @@ curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:3000
 ```bash
 # 实时跟踪(Ctrl-C 退出)
 sudo journalctl -u ai-agent-wallet -f        # web 应用日志(Next 的 console 输出都在这)
+sudo journalctl -u ai-agent-wallet-daemon -f # agent daemon 日志(每轮 idle/cycle 的单行 JSON)
 sudo journalctl -u cloudflared-wallet -f     # 隧道日志
 
 # 最近 N 行 / 按时间 / 只看错误

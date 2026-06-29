@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:daemon": "node esbuild.daemon.mjs",
     "start": "next start",
+    "daemon": "node --env-file=.env.local dist/daemon.mjs",
     "lint": "eslint"
   },
   "dependencies": {
@@ -23,6 +25,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
+    "esbuild": "^0.25.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

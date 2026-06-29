@@ -111,10 +111,13 @@ Log decision + trade to SQLite
 
 ## Known Limitations (MVP)
 
-- No Uniswap swap execution yet (route built but not signed)
+- No Uniswap swap execution yet (route built but not signed); `autoExecute` only marks a decision as `executed`, it does NOT send a transaction
 - No DCA execution scheduling (logic in rules.ts but not time-triggered)
-- Portfolio value is mocked (1 ETH) until wallet connection
-- Agent runs only in-process; no persistent daemon mode yet
+- Portfolio: the standalone daemon reads real on-chain ETH balance when `AGENT_WALLET_ADDRESS` is set (read-only), else falls back to mock 1 ETH; ERC-20 valuation still not done
+
+### Persistent daemon (implemented)
+
+The agent runs as a standalone 24/7 process — `daemon/agent.ts`, bundled by esbuild (`npm run build:daemon`) to `dist/daemon.mjs`, run under systemd as `ai-agent-wallet-daemon.service` (see DEPLOY.md). The web process no longer runs an in-process loop. Coordination is via the SQLite `agent_state` table (single row id=1, WAL mode): the web `start/stop` routes toggle `enabled`/config, the daemon obeys it and writes `lastHeartbeat` each cycle; `status` reports `running = enabled && heartbeat-fresh`. Core decision logic stays in `lib/agent/engine.ts` `executeAgentDecision(portfolio, opts)`, reused by the daemon.
 
 ## Future Enhancements
 

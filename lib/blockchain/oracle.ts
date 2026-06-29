@@ -1,4 +1,4 @@
-import { publicClient, CHAINLINK_FEEDS, CHAINLINK_ABI } from './client';
+import { getPublicClient, CHAINLINK_FEEDS, CHAINLINK_ABI } from './client';
 import type { OraclePrice } from '@/types';
 
 export async function getChainlinkPrice(
@@ -6,6 +6,9 @@ export async function getChainlinkPrice(
   chain: 'mainnet' | 'sepolia' = 'sepolia'
 ): Promise<OraclePrice> {
   const feedAddress = CHAINLINK_FEEDS[symbol][chain] as `0x${string}`;
+  // Use the client for the requested chain (not the default), so a mainnet feed
+  // is read via a mainnet RPC.
+  const publicClient = getPublicClient(chain);
 
   const [latestData, decimals] = await Promise.all([
     publicClient.readContract({

@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import type { Trade, TradeStrategy, AgentDecision } from '@/types';
+import type { Trade, TradeStrategy, AgentDecision, AgentState } from '@/types';
 
 const dbDir = path.join(os.homedir(), '.ai-agent-wallet');
 const dbPath = path.join(dbDir, 'data.db');
@@ -19,6 +19,11 @@ export function initDB(): Database.Database {
     }
 
     db = new Database(dbPath);
+
+    // WAL lets the web process read while the daemon writes (one writer + many
+    // readers). busy_timeout avoids SQLITE_BUSY when both briefly contend.
+    db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS strategies (
@@ -59,10 +64,25 @@ export function initDB(): Database.Database {
         status TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS agent_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        enabled INTEGER NOT NULL DEFAULT 0,
+        checkInterval INTEGER NOT NULL DEFAULT 30000,
+        minConfidence INTEGER NOT NULL DEFAULT 60,
+        autoExecute INTEGER NOT NULL DEFAULT 0,
+        lastHeartbeat INTEGER NOT NULL DEFAULT 0,
+        updatedAt INTEGER NOT NULL DEFAULT 0
+      );
+
       CREATE INDEX IF NOT EXISTS idx_strategies_enabled ON strategies(enabled);
       CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);
       CREATE INDEX IF NOT EXISTS idx_decisions_timestamp ON decisions(timestamp);
     `);
+
+    // Ensure the single agent_state row exists (id = 1) with defaults.
+    db.prepare(
+      `INSERT OR IGNORE INTO agent_state (id, updatedAt) VALUES (1, ?)`
+    ).run(Math.floor(Date.now() / 1000));
 
     return db;
   } catch (error) {
@@ -176,4 +196,66 @@ export function getDecisions(limit = 100): AgentDecision[] {
       : undefined,
     status: row.status,
   }));
+}
+
+// --- Agent control/runtime state (single row id=1) ---
+// Coordinates the web process and the standalone daemon: the web toggles
+// `enabled`/config, the daemon obeys it and writes `lastHeartbeat` each cycle.
+
+export function getAgentState(): AgentState {
+  const database = db || initDB();
+  const row = database
+    .prepare('SELECT * FROM agent_state WHERE id = 1')
+    .get() as {
+      enabled: number;
+      checkInterval: number;
+      minConfidence: number;
+      autoExecute: number;
+      lastHeartbeat: number;
+      updatedAt: number;
+    };
+
+  return {
+    enabled: Boolean(row.enabled),
+    checkInterval: row.checkInterval,
+    minConfidence: row.minConfidence,
+    autoExecute: Boolean(row.autoExecute),
+    lastHeartbeat: row.lastHeartbeat,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function setAgentState(
+  patch: Partial<Omit<AgentState, 'updatedAt'>>
+): AgentState {
+  const database = db || initDB();
+  const current = getAgentState();
+  const next: AgentState = {
+    ...current,
+    ...patch,
+    updatedAt: Math.floor(Date.now() / 1000),
+  };
+
+  database
+    .prepare(
+      `UPDATE agent_state
+         SET enabled = ?, checkInterval = ?, minConfidence = ?, autoExecute = ?, updatedAt = ?
+       WHERE id = 1`
+    )
+    .run(
+      next.enabled ? 1 : 0,
+      next.checkInterval,
+      next.minConfidence,
+      next.autoExecute ? 1 : 0,
+      next.updatedAt
+    );
+
+  return next;
+}
+
+// Daemon liveness ping; cheap, isolated from setAgentState so it never clobbers
+// a concurrent config change from the web.
+export function heartbeat(ts: number = Math.floor(Date.now() / 1000)): void {
+  const database = db || initDB();
+  database.prepare('UPDATE agent_state SET lastHeartbeat = ? WHERE id = 1').run(ts);
 }
