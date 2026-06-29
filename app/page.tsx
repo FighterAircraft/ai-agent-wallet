@@ -2,10 +2,13 @@
 
 import { Portfolio } from '@/components/Portfolio/Portfolio';
 import { AgentStatus } from '@/components/AgentStatus/AgentStatus';
+import { SiteNav } from '@/components/SiteNav';
 
 export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100">
+      <SiteNav />
+
       {/* Header */}
       <div className="bg-gradient-to-r from-purple-600 to-blue-600 text-white">
         <div className="max-w-6xl mx-auto px-4 py-12">
